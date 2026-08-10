@@ -3,12 +3,18 @@ const axios = require('axios');
 
 const manifest = {
     id: 'org.rc2stm.addon',
-    version: '1.1.0',
+    version: '1.2.0',
     name: 'RedeCanais TV Functional',
     description: 'Live Brazilian TV channels for Stremio (Powered by IPTV-org)',
     resources: ['stream'],
     types: ['series'],
-    catalogs: [],
+    catalogs: [
+        {
+            type: 'series',
+            id: 'rc2stm_channels',
+            name: 'RedeCanais TV Channels'
+        }
+    ],
 };
 
 const builder = new addonBuilder(manifest);
@@ -27,7 +33,11 @@ async function parseM3U() {
                 const name = lines[i].split(',').pop().trim();
                 const url = lines[i + 1] ? lines[i + 1].trim() : null;
                 if (url && url.startsWith('http')) {
-                    channels.push({ id: name.toLowerCase().replace(/\s+/g, '_'), name, url });
+                    channels.push({
+                        id: name.toLowerCase().replace(/\s+/g, '_'),
+                        name: name,
+                        url: url
+                    });
                 }
             }
         }
@@ -38,6 +48,23 @@ async function parseM3U() {
     }
 }
 
+// Catalog handler to populate the Stremio menu
+builder.defineCatalogHandler(async (args) => {
+    if (args.id === 'rc2stm_channels') {
+        const channels = await parseM3U();
+        return {
+            metadatas: channels.map(c => ({
+                id: c.id,
+                type: 'series',
+                name: c.name,
+                poster: 'https://via.placeholder.com/300x450?text=TV+Channel'
+            }))
+        };
+    }
+    return { metadatas: [] };
+});
+
+// Stream handler to provide the actual video link
 builder.defineStreamHandler(async (args) => {
     if (args.type === 'series') {
         const channels = await parseM3U();

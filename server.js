@@ -1,8 +1,113 @@
 const { serveHTTP } = require('stremio-addon-sdk');
+const http = require('http');
+const httpProxy = require('http-proxy');
+const axios = require('axios');
 const addon = require('./index');
 
 const PORT = process.env.PORT || 7000;
+const INTERNAL_PORT = 7001;
 
-serveHTTP(addon, { port: PORT }, () => {
-    console.log(`Addon running at http://localhost:${PORT}/manifest.json`);
+// Start the Stremio addon SDK server on internal port
+serveHTTP(addon, { port: INTERNAL_PORT }, () => {
+    console.log(`Stremio addon running internally on port ${INTERNAL_PORT}`);
+});
+
+// Create a proxy server for non-/proxy requests
+const proxy = httpProxy.createProxyServer({
+    target: `http://127.0.0.1:${INTERNAL_PORT}`
+});
+
+// Main server on PORT: handles /proxy directly, forwards everything else to addon
+const server = http.createServer(async (req, res) => {
+    const parsedUrl = new URL(req.url, `http://localhost:${PORT}`);
+    
+    // Handle proxy endpoint
+    if (parsedUrl.pathname === '/proxy') {
+        const targetUrl = parsedUrl.searchParams.get('url');
+        if (!targetUrl) {
+            res.writeHead(400, { 'Content-Type': 'text/plain' });
+            res.end('Missing url parameter');
+            return;
+        }
+        
+        try {
+            const response = await axios.get(targetUrl, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Referer': new URL(targetUrl).origin + '/'
+                },
+                responseType: 'text',
+                timeout: 10000,
+                maxRedirects: 5
+            });
+            
+            let body = response.data;
+            const contentType = response.headers['content-type'] || 'application/octet-stream';
+            
+            // Rewrite m3u8 playlist URLs to go through proxy
+            if (targetUrl.endsWith('.m3u8') || contentType.includes('mpegurl') || contentType.includes('m3u8')) {
+                const baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
+                const proxyBase = `http://${req.headers.host}/proxy?url=`;
+                
+                body = body.split('\n').map(line => {
+                    const trimmed = line.trim();
+                    
+                    if (trimmed && !trimmed.startsWith('#')) {
+                        let fullUrl = trimmed;
+                        if (trimmed.startsWith('http')) {
+                            fullUrl = trimmed;
+                        } else if (trimmed.startsWith('/')) {
+                            fullUrl = new URL(trimmed, targetUrl).href;
+                        } else {
+                            fullUrl = baseUrl + trimmed;
+                        }
+                        return `${proxyBase}${encodeURIComponent(fullUrl)}`;
+                    }
+                    
+                    if (trimmed.startsWith('#') && trimmed.includes('URI="')) {
+                        return trimmed.replace(/URI="([^"]+)"/g, (match, uri) => {
+                            let fullUri = uri;
+                            if (uri.startsWith('http')) {
+                                fullUri = uri;
+                            } else if (uri.startsWith('/')) {
+                                fullUri = new URL(uri, targetUrl).href;
+                            } else {
+                                fullUri = baseUrl + uri;
+                            }
+                            return `URI="${proxyBase}${encodeURIComponent(fullUri)}"`;
+                        });
+                    }
+                    
+                    return line;
+                }).join('\n');
+            }
+            
+            res.writeHead(200, {
+                'Content-Type': contentType,
+                'Access-Control-Allow-Origin': '*'
+            });
+            res.end(body);
+        } catch (e) {
+            console.error('Proxy error for', targetUrl, ':', e.message);
+            res.writeHead(502, { 'Content-Type': 'text/plain' });
+            res.end('Proxy error: ' + e.message);
+        }
+        return;
+    }
+    
+    // Forward all other requests to the Stremio addon server
+    proxy.web(req, res);
+});
+
+proxy.on('error', (err, req, res) => {
+    console.error('Proxy forward error:', err.message);
+    if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'text/plain' });
+        res.end('Bad gateway: ' + err.message);
+    }
+});
+
+server.listen(PORT, () => {
+    console.log(`Server running at http://localhost:${PORT}/manifest.json`);
+    console.log(`Proxy endpoint at http://localhost:${PORT}/proxy?url=<url>`);
 });

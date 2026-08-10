@@ -3,7 +3,7 @@ const axios = require('axios');
 
 const manifest = {
     id: 'org.rc2stm.addon',
-    version: '1.6.0',
+    version: '1.7.0',
     name: 'RedeCanais TV',
     description: 'Live Brazilian TV channels for Stremio (Powered by IPTV-org)',
     resources: ['catalog', 'meta', 'stream'],
@@ -39,26 +39,19 @@ async function parseM3U() {
             if (lines[i].startsWith('#EXTINF')) {
                 const line = lines[i];
                 
-                // Parse tvg-id
                 const tvgIdMatch = line.match(/tvg-id="([^"]*)"/);
                 const tvgId = tvgIdMatch ? tvgIdMatch[1] : '';
                 
-                // Parse tvg-logo
                 const tvgLogoMatch = line.match(/tvg-logo="([^"]*)"/);
                 const tvgLogo = tvgLogoMatch ? tvgLogoMatch[1] : '';
                 
-                // Parse group-title
                 const groupMatch = line.match(/group-title="([^"]*)"/);
                 const group = groupMatch ? groupMatch[1] : '';
                 
-                // Parse channel name (after last comma)
                 const name = line.split(',').pop().trim();
-                
-                // Parse stream URL (next line)
                 const url = lines[i + 1] ? lines[i + 1].trim() : null;
                 
                 if (url && url.startsWith('http') && name) {
-                    // Use tvg-id if available, otherwise generate from name
                     const id = tvgId || name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
                     channels.push({
                         id: id,
@@ -119,17 +112,18 @@ builder.defineCatalogHandler(async (args) => {
     return { metas: [] };
 });
 
-// Stream handler
+// Stream handler - routes through proxy to bypass CDN 403
 builder.defineStreamHandler(async (args) => {
     if (args.type === 'channel') {
         const channels = await parseM3U();
         const channel = channels.find(c => c.id === args.id);
         
         if (channel) {
+            const proxyUrl = `http://localhost:${process.env.PORT || 7000}/proxy?url=${encodeURIComponent(channel.url)}`;
             return {
                 streams: [{
                     title: channel.name,
-                    url: channel.url
+                    url: proxyUrl
                 }]
             };
         }

@@ -1,10 +1,14 @@
 {
   "name": "rc2stm",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Stremio plugin to stream channels from redecanaistv.capital",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "stremio-addon-sdk": "^1.0.0"
   },
   "keywords": [],
   "author": "",

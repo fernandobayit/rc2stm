@@ -1,10 +1,11 @@
 const { addonBuilder } = require('stremio-addon-sdk');
+const axios = require('axios');
 
 const manifest = {
     id: 'org.rc2stm.addon',
-    version: '1.0.0',
-    name: 'RedeCanais TV for Stremio',
-    description: 'Stream channels from redecanaistv.capital directly in Stremio',
+    version: '1.1.0',
+    name: 'RedeCanais TV Functional',
+    description: 'Live Brazilian TV channels for Stremio (Powered by IPTV-org)',
     resources: ['stream'],
     types: ['series'],
     catalogs: [],
@@ -12,27 +13,46 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-// Mock data based on target site categories
-const CHANNELS = [
-    { id: 'globo_sp', name: 'Globo SP', url: 'http://example.com/stream1.m3u8' },
-    { id: 'sbt_sp', name: 'SBT SP', url: 'http://example.com/stream2.m3u8' },
-    { id: 'band_sp', name: 'Band SP', url: 'http://example.com/stream3.m3u8' },
-    { id: 'record_sp', name: 'Record SP', url: 'http://example.com/stream4.m3u8' },
-];
+// High-quality public Brazilian IPTV source
+const M3U_URL = 'https://iptv-org.github.io/iptv/index.m3u';
 
-builder.defineStreamHandler((args) => {
+async function parseM3U() {
+    try {
+        const response = await axios.get(M3U_URL);
+        const lines = response.data.split('\n');
+        const channels = [];
+        
+        for (let i = 0; i < lines.length; i++) {
+            if (lines[i].startsWith('#EXTINF')) {
+                const name = lines[i].split(',').pop().trim();
+                const url = lines[i + 1] ? lines[i + 1].trim() : null;
+                if (url && url.startsWith('http')) {
+                    channels.push({ id: name.toLowerCase().replace(/\s+/g, '_'), name, url });
+                }
+            }
+        }
+        return channels;
+    } catch (e) {
+        console.error('Error fetching M3U:', e);
+        return [];
+    }
+}
+
+builder.defineStreamHandler(async (args) => {
     if (args.type === 'series') {
-        const channel = CHANNELS.find(c => c.id === args.id);
+        const channels = await parseM3U();
+        const channel = channels.find(c => c.id === args.id || c.name === args.id);
+        
         if (channel) {
-            return Promise.resolve({
+            return {
                 streams: [{
                     title: channel.name,
                     url: channel.url
                 }]
-            });
+            };
         }
     }
-    return Promise.resolve({ streams: [] });
+    return { streams: [] };
 });
 
 module.exports = builder.getInterface();

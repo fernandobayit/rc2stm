@@ -3,14 +3,14 @@ const axios = require('axios');
 
 const manifest = {
     id: 'org.rc2stm.addon',
-    version: '1.2.0',
+    version: '1.4.0',
     name: 'RedeCanais TV Functional',
     description: 'Live Brazilian TV channels for Stremio (Powered by IPTV-org)',
-    resources: ['stream'],
-    types: ['series'],
+    resources: ['catalog', 'meta', 'stream'],
+    types: ['tv'],
     catalogs: [
         {
-            type: 'series',
+            type: 'tv',
             id: 'rc2stm_channels',
             name: 'RedeCanais TV Channels'
         }
@@ -19,8 +19,7 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-// High-quality public Brazilian IPTV source
-const M3U_URL = 'https://iptv-org.github.io/iptv/index.m3u';
+const M3U_URL = 'https://iptv-org.github.io/iptv/countries/br.m3u';
 
 async function parseM3U() {
     try {
@@ -48,27 +47,46 @@ async function parseM3U() {
     }
 }
 
-// Catalog handler to populate the Stremio menu
+// Meta handler - must return { meta: { ... } }
+builder.defineMetaHandler(async (args) => {
+    if (args.type === 'tv') {
+        const channels = await parseM3U();
+        const channel = channels.find(c => c.id === args.id);
+        if (channel) {
+            return {
+                meta: {
+                    id: channel.id,
+                    type: 'tv',
+                    name: channel.name,
+                    poster: 'https://via.placeholder.com/300x450?text=TV+Channel'
+                }
+            };
+        }
+    }
+    return { meta: null };
+});
+
+// Catalog handler - must return { metas: [...] }
 builder.defineCatalogHandler(async (args) => {
     if (args.id === 'rc2stm_channels') {
         const channels = await parseM3U();
         return {
-            metadatas: channels.map(c => ({
+            metas: channels.map(c => ({
                 id: c.id,
-                type: 'series',
+                type: 'tv',
                 name: c.name,
                 poster: 'https://via.placeholder.com/300x450?text=TV+Channel'
             }))
         };
     }
-    return { metadatas: [] };
+    return { metas: [] };
 });
 
-// Stream handler to provide the actual video link
+// Stream handler - must return { streams: [...] }
 builder.defineStreamHandler(async (args) => {
-    if (args.type === 'series') {
+    if (args.type === 'tv') {
         const channels = await parseM3U();
-        const channel = channels.find(c => c.id === args.id || c.name === args.id);
+        const channel = channels.find(c => c.id === args.id);
         
         if (channel) {
             return {

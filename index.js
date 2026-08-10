@@ -3,7 +3,7 @@ const axios = require('axios');
 
 const manifest = {
     id: 'org.rc2stm.addon',
-    version: '1.7.0',
+    version: '1.8.0',
     name: 'RedeCanais TV',
     description: 'Live Brazilian TV channels for Stremio (Powered by IPTV-org)',
     resources: ['catalog', 'meta', 'stream'],
@@ -15,25 +15,33 @@ const manifest = {
             name: 'RedeCanais TV Channels'
         }
     ],
+    behaviorHints: {
+        configurable: true,
+        configurationRequired: false
+    }
 };
 
 const builder = new addonBuilder(manifest);
 
-const M3U_URL = 'https://iptv-org.github.io/iptv/countries/br.m3u';
+const DEFAULT_M3U_URL = 'https://iptv-org.github.io/iptv/countries/br.m3u';
 
-// Cache channels to avoid refetching on every request
 let channelsCache = null;
 let cacheTime = 0;
-const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+const CACHE_TTL = 30 * 60 * 1000;
 
-async function parseM3U() {
+async function parseM3U(m3uUrl) {
     if (channelsCache && (Date.now() - cacheTime) < CACHE_TTL) {
         return channelsCache;
     }
     try {
-        const response = await axios.get(M3U_URL);
+        const url = m3uUrl || DEFAULT_M3U_URL;
+        const response = await axios.get(url, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+            timeout: 15000
+        });
         const lines = response.data.split('\n');
         const channels = [];
+        const seen = new Set();
         
         for (let i = 0; i < lines.length; i++) {
             if (lines[i].startsWith('#EXTINF')) {
@@ -49,23 +57,26 @@ async function parseM3U() {
                 const group = groupMatch ? groupMatch[1] : '';
                 
                 const name = line.split(',').pop().trim();
-                const url = lines[i + 1] ? lines[i + 1].trim() : null;
+                const streamUrl = lines[i + 1] ? lines[i + 1].trim() : null;
                 
-                if (url && url.startsWith('http') && name) {
-                    const id = tvgId || name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
-                    channels.push({
-                        id: id,
-                        name: name,
-                        url: url,
-                        logo: tvgLogo || 'https://via.placeholder.com/300x450?text=TV+Channel',
-                        group: group
-                    });
+                if (streamUrl && streamUrl.startsWith('http') && name) {
+                    const id = tvgId || name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_@.]/g, '');
+                    if (!seen.has(id)) {
+                        seen.add(id);
+                        channels.push({
+                            id: id,
+                            name: name,
+                            url: streamUrl,
+                            logo: tvgLogo || '',
+                            group: group
+                        });
+                    }
                 }
             }
         }
         channelsCache = channels;
         cacheTime = Date.now();
-        console.log(`Parsed ${channels.length} channels`);
+        console.log(`Parsed ${channels.length} channels from ${url}`);
         return channels;
     } catch (e) {
         console.error('Error fetching M3U:', e.message);
@@ -73,7 +84,6 @@ async function parseM3U() {
     }
 }
 
-// Meta handler
 builder.defineMetaHandler(async (args) => {
     if (args.type === 'channel') {
         const channels = await parseM3U();
@@ -84,8 +94,8 @@ builder.defineMetaHandler(async (args) => {
                     id: channel.id,
                     type: 'channel',
                     name: channel.name,
-                    poster: channel.logo,
-                    logo: channel.logo,
+                    poster: channel.logo || undefined,
+                    logo: channel.logo || undefined,
                     description: `Canal: ${channel.name}${channel.group ? ' | Categoria: ' + channel.group : ''}`,
                     genres: channel.group ? [channel.group] : []
                 }
@@ -95,7 +105,6 @@ builder.defineMetaHandler(async (args) => {
     return { meta: null };
 });
 
-// Catalog handler
 builder.defineCatalogHandler(async (args) => {
     if (args.id === 'rc2stm_channels') {
         const channels = await parseM3U();
@@ -104,15 +113,14 @@ builder.defineCatalogHandler(async (args) => {
                 id: c.id,
                 type: 'channel',
                 name: c.name,
-                poster: c.logo,
-                logo: c.logo
+                poster: c.logo || undefined,
+                logo: c.logo || undefined
             }))
         };
     }
     return { metas: [] };
 });
 
-// Stream handler - routes through proxy to bypass CDN 403
 builder.defineStreamHandler(async (args) => {
     if (args.type === 'channel') {
         const channels = await parseM3U();
@@ -123,7 +131,11 @@ builder.defineStreamHandler(async (args) => {
             return {
                 streams: [{
                     title: channel.name,
-                    url: proxyUrl
+                    url: proxyUrl,
+                    behaviorHints: {
+                        notWebReady: true,
+                        bingeGroup: `rc2stm-${channel.id}`
+                    }
                 }]
             };
         }

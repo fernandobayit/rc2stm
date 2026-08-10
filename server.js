@@ -7,21 +7,17 @@ const addon = require('./index');
 const PORT = process.env.PORT || 7000;
 const INTERNAL_PORT = 7001;
 
-// Start the Stremio addon SDK server on internal port
 serveHTTP(addon, { port: INTERNAL_PORT }, () => {
     console.log(`Stremio addon running internally on port ${INTERNAL_PORT}`);
 });
 
-// Create a proxy server for non-/proxy requests
 const proxy = httpProxy.createProxyServer({
     target: `http://127.0.0.1:${INTERNAL_PORT}`
 });
 
-// Main server on PORT: handles /proxy directly, forwards everything else to addon
 const server = http.createServer(async (req, res) => {
     const parsedUrl = new URL(req.url, `http://localhost:${PORT}`);
     
-    // Handle proxy endpoint
     if (parsedUrl.pathname === '/proxy') {
         const targetUrl = parsedUrl.searchParams.get('url');
         if (!targetUrl) {
@@ -31,21 +27,22 @@ const server = http.createServer(async (req, res) => {
         }
         
         try {
+            const isPlaylist = targetUrl.endsWith('.m3u8') || targetUrl.includes('.m3u8?');
+            
             const response = await axios.get(targetUrl, {
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                     'Referer': new URL(targetUrl).origin + '/'
                 },
-                responseType: 'text',
-                timeout: 10000,
+                responseType: isPlaylist ? 'text' : 'arraybuffer',
+                timeout: 15000,
                 maxRedirects: 5
             });
             
-            let body = response.data;
-            const contentType = response.headers['content-type'] || 'application/octet-stream';
+            const contentType = response.headers['content-type'] || (isPlaylist ? 'application/vnd.apple.mpegurl' : 'video/mp2t');
             
-            // Rewrite m3u8 playlist URLs to go through proxy
-            if (targetUrl.endsWith('.m3u8') || contentType.includes('mpegurl') || contentType.includes('m3u8')) {
+            if (isPlaylist) {
+                let body = response.data;
                 const baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
                 const proxyBase = `http://${req.headers.host}/proxy?url=`;
                 
@@ -80,22 +77,28 @@ const server = http.createServer(async (req, res) => {
                     
                     return line;
                 }).join('\n');
+                
+                res.writeHead(200, {
+                    'Content-Type': contentType,
+                    'Access-Control-Allow-Origin': '*'
+                });
+                res.end(body);
+            } else {
+                res.writeHead(200, {
+                    'Content-Type': contentType,
+                    'Access-Control-Allow-Origin': '*',
+                    'Content-Length': response.data.length
+                });
+                res.end(response.data);
             }
-            
-            res.writeHead(200, {
-                'Content-Type': contentType,
-                'Access-Control-Allow-Origin': '*'
-            });
-            res.end(body);
         } catch (e) {
-            console.error('Proxy error for', targetUrl, ':', e.message);
+            console.error('Proxy error for', targetUrl.substring(0, 80), ':', e.message);
             res.writeHead(502, { 'Content-Type': 'text/plain' });
             res.end('Proxy error: ' + e.message);
         }
         return;
     }
     
-    // Forward all other requests to the Stremio addon server
     proxy.web(req, res);
 });
 

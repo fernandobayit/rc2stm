@@ -3,14 +3,14 @@ const axios = require('axios');
 
 const manifest = {
     id: 'org.rc2stm.addon',
-    version: '1.5.0',
-    name: 'RedeCanais TV Functional',
+    version: '1.6.0',
+    name: 'RedeCanais TV',
     description: 'Live Brazilian TV channels for Stremio (Powered by IPTV-org)',
     resources: ['catalog', 'meta', 'stream'],
-    types: ['tv'],
+    types: ['channel'],
     catalogs: [
         {
-            type: 'tv',
+            type: 'channel',
             id: 'rc2stm_channels',
             name: 'RedeCanais TV Channels'
         }
@@ -82,14 +82,14 @@ async function parseM3U() {
 
 // Meta handler
 builder.defineMetaHandler(async (args) => {
-    if (args.type === 'tv') {
+    if (args.type === 'channel') {
         const channels = await parseM3U();
         const channel = channels.find(c => c.id === args.id);
         if (channel) {
             return {
                 meta: {
                     id: channel.id,
-                    type: 'tv',
+                    type: 'channel',
                     name: channel.name,
                     poster: channel.logo,
                     logo: channel.logo,
@@ -109,7 +109,7 @@ builder.defineCatalogHandler(async (args) => {
         return {
             metas: channels.map(c => ({
                 id: c.id,
-                type: 'tv',
+                type: 'channel',
                 name: c.name,
                 poster: c.logo,
                 logo: c.logo
@@ -121,7 +121,7 @@ builder.defineCatalogHandler(async (args) => {
 
 // Stream handler
 builder.defineStreamHandler(async (args) => {
-    if (args.type === 'tv') {
+    if (args.type === 'channel') {
         const channels = await parseM3U();
         const channel = channels.find(c => c.id === args.id);
         

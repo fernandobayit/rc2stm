@@ -1,10 +1,25 @@
-const puppeteer = require('puppeteer-core');
+const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const cheerio = require('cheerio');
 
 const SITE_URL = 'https://redecanaistv.capital/';
+const FLARESOLVERR_URL = process.env.FLARESOLVERR_URL || 'http://flaresolverr:8191/v1';
 const CACHE_FILE = path.join(__dirname, 'channels_cache.json');
 const CACHE_TTL = 60 * 60 * 1000;
+
+async function flaresolverrGet(url) {
+    const response = await axios.post(FLARESOLVERR_URL, {
+        cmd: 'request.get',
+        url: url,
+        maxTimeout: 60000
+    }, { timeout: 70000 });
+    
+    if (response.data && response.data.solution) {
+        return response.data.solution;
+    }
+    throw new Error('FlareSolverr: no solution returned');
+}
 
 async function scrapeRedeCanais() {
     if (fs.existsSync(CACHE_FILE)) {
@@ -15,87 +30,95 @@ async function scrapeRedeCanais() {
         }
     }
 
-    console.log('Starting scraper for redecanaistv.capital...');
-    let browser = null;
-    
+    console.log('Starting scraper via FlareSolverr...');
+    const channels = [];
+    const seenUrls = new Set();
+
     try {
-        browser = await puppeteer.launch({
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
-            headless: 'new',
-            args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--window-size=1920,1080']
-        });
-        const page = await browser.newPage();
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-        await page.setViewport({ width: 1920, height: 1080 });
+        console.log('Requesting main page via FlareSolverr...');
+        const solution = await flaresolverrGet(SITE_URL);
+        const html = solution.response || '';
+        console.log('FlareSolverr returned page, length:', html.length);
         
-        await page.goto(SITE_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        const $ = cheerio.load(html);
         
-        for (let i = 0; i < 30; i++) {
-            await page.waitForTimeout(2000);
-            const title = await page.title();
-            if (!title.includes('Just a moment') && !title.includes('Cloudflare')) break;
-            console.log(`Waiting Cloudflare... (${i+1}/30)`);
-        }
-        await page.waitForTimeout(3000);
-        
-        const channels = [];
-        const seenUrls = new Set();
-        
-        page.on('response', response => {
-            const url = response.url();
-            if (url.includes('.m3u8') && !seenUrls.has(url)) {
-                seenUrls.add(url);
-                channels.push({ name: '', url, logo: '' });
+        const channelLinks = [];
+        $('a, button, [role=button], .channel, .canal').each((i, el) => {
+            const name = $(el).text().trim() || $(el).attr('data-name') || $(el).attr('title') || '';
+            const href = $(el).attr('href') || $(el).attr('data-url') || '';
+            const logo = $(el).find('img').attr('src') || $(el).attr('data-logo') || '';
+            if (name && name.length > 1 && name.length < 100 && href) {
+                channelLinks.push({ name, href, logo });
             }
         });
         
-        const channelData = await page.evaluate(() => {
-            const channels = [];
-            document.querySelectorAll('a[href], button[data-url], div[data-url], [data-channel], .channel, .canal').forEach(el => {
-                const name = el.textContent?.trim() || el.getAttribute('data-name') || el.getAttribute('title') || '';
-                const url = el.getAttribute('data-url') || el.getAttribute('href') || '';
-                const logo = el.getAttribute('data-logo') || el.querySelector('img')?.src || '';
-                if (name && name.length > 1 && name.length < 100) channels.push({ name, url, logo });
-            });
-            return channels;
-        });
+        console.log(`Found ${channelLinks.length} channel links on main page`);
         
-        const allLinks = await page.evaluate(() =>
-            Array.from(document.querySelectorAll('a, button, [role=button]')).map(el => ({
-                text: el.textContent?.trim().substring(0, 50),
-                href: el.href || el.getAttribute('data-url') || ''
-            })).filter(l => l.text && l.text.length > 1)
-        );
-        
-        for (const link of allLinks.slice(0, 50)) {
-            if (link.href && (link.href.includes('canal') || link.href.includes('channel') || link.href.includes('redecanaistv'))) {
-                try {
-                    await page.goto(link.href, { waitUntil: 'domcontentloaded', timeout: 15000 });
-                    await page.waitForTimeout(2000);
-                    const videoSrc = await page.evaluate(() => {
-                        const v = document.querySelector('video'); if (v?.src) return v.src;
-                        const s = document.querySelector('source'); if (s?.src) return s.src;
-                        const i = document.querySelector('iframe'); if (i?.src) return i.src;
-                        return null;
+        for (const ch of channelLinks.slice(0, 100)) {
+            let channelUrl = ch.href;
+            if (channelUrl.startsWith('/')) channelUrl = 'https://redecanaistv.capital' + channelUrl;
+            if (!channelUrl.startsWith('http')) continue;
+            
+            try {
+                console.log(`Checking: ${ch.name}`);
+                const chSolution = await flaresolverrGet(channelUrl);
+                const chHtml = chSolution.response || '';
+                const $ch = cheerio.load(chHtml);
+                
+                let streamUrl = null;
+                
+                $ch('video source, video').each((i, el) => {
+                    const src = $ch(el).attr('src');
+                    if (src && !streamUrl) streamUrl = src;
+                });
+                
+                if (!streamUrl) {
+                    $ch('iframe').each((i, el) => {
+                        const src = $ch(el).attr('src');
+                        if (src && !streamUrl) streamUrl = src;
                     });
-                    if (videoSrc) channels.push({ name: link.text, url: videoSrc, logo: '' });
-                } catch(e) {}
+                }
+                
+                if (!streamUrl) {
+                    const m3u8Match = chHtml.match(/https?:\/\/[^"'\s]+\.m3u8[^"'\s]*/);
+                    if (m3u8Match) streamUrl = m3u8Match[0];
+                }
+                
+                if (!streamUrl) {
+                    $ch('[data-src], [data-url], [data-video]').each((i, el) => {
+                        const src = $ch(el).attr('data-src') || $ch(el).attr('data-url') || $ch(el).attr('data-video');
+                        if (src && src.includes('m3u8') && !streamUrl) streamUrl = src;
+                    });
+                }
+                
+                if (streamUrl && !seenUrls.has(streamUrl)) {
+                    seenUrls.add(streamUrl);
+                    channels.push({ name: ch.name, url: streamUrl, logo: ch.logo || '' });
+                    console.log(`✓ ${ch.name} -> ${streamUrl.substring(0, 70)}`);
+                }
+            } catch (e) {
+                console.error(`✗ ${ch.name} - ${e.message}`);
             }
         }
         
-        for (const ch of channelData) {
-            if (ch.url?.startsWith('http') && !seenUrls.has(ch.url)) {
-                seenUrls.add(ch.url);
-                channels.push({ name: ch.name, url: ch.url, logo: ch.logo || '' });
+        const m3u8Regex = /https?:\/\/[^"'\s]+\.m3u8[^"'\s]*/g;
+        const mainM3u8s = html.match(m3u8Regex) || [];
+        for (const url of mainM3u8s) {
+            if (!seenUrls.has(url)) {
+                seenUrls.add(url);
+                channels.push({ name: `Channel ${channels.length + 1}`, url, logo: '' });
             }
         }
         
-        if (channels.length > 0) fs.writeFileSync(CACHE_FILE, JSON.stringify({ channels, timestamp: Date.now() }));
-        await browser.close();
+        console.log(`Scraper found ${channels.length} channels total`);
+        
+        if (channels.length > 0) {
+            fs.writeFileSync(CACHE_FILE, JSON.stringify({ channels, timestamp: Date.now() }));
+        }
+        
         return channels;
     } catch (e) {
         console.error('Scraper error:', e.message);
-        if (browser) await browser.close();
         if (fs.existsSync(CACHE_FILE)) {
             const cached = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf-8'));
             if (cached.channels?.length > 0) return cached.channels;

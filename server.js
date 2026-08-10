@@ -4,8 +4,8 @@ const httpProxy = require('http-proxy');
 const axios = require('axios');
 const addon = require('./index');
 
-const PORT = process.env.PORT || 7000;
-const INTERNAL_PORT = 7001;
+const PORT = process.env.PORT || 8000;
+const INTERNAL_PORT = 8001;
 
 serveHTTP(addon, { port: INTERNAL_PORT }, () => {
     console.log(`Stremio addon running internally on port ${INTERNAL_PORT}`);

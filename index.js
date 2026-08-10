@@ -4,7 +4,7 @@ const { scrapeRedeCanais } = require('./scraper');
 
 const manifest = {
     id: 'org.rc2stm.addon',
-    version: '2.0.0',
+    version: '2.1.0',
     name: 'RedeCanais TV',
     description: 'Live Brazilian TV channels scraped from redecanaistv.capital',
     resources: ['catalog', 'meta', 'stream'],
@@ -85,7 +85,7 @@ builder.defineStreamHandler(async (args) => {
         const channels = await getChannels();
         const channel = channels.find(c => c.id === args.id);
         if (channel) {
-            const proxyUrl = `http://localhost:${process.env.PORT || 7000}/proxy?url=${encodeURIComponent(channel.url)}`;
+            const proxyUrl = `http://localhost:${process.env.PORT || 8000}/proxy?url=${encodeURIComponent(channel.url)}`;
             return { streams: [{ title: channel.name, url: proxyUrl, behaviorHints: { notWebReady: true, bingeGroup: `rc2stm-${channel.id}` } }] };
         }
     }

@@ -14,10 +14,10 @@ services:
   rc2stm-addon:
     build: .
     ports:
-      - "7000:7000"
+      - "8000:8000"
     restart: always
     environment:
-      - PORT=7000
+      - PORT=8000
       - FLARESOLVERR_URL=http://flaresolverr:8191/v1
     depends_on:
       - flaresolverr
